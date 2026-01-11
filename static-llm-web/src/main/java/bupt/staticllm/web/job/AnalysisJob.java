@@ -38,7 +38,7 @@ public class AnalysisJob extends QuartzJobBean {
         log.info("开始执行分析任务 TaskID: {}, Jar: {}", taskId, targetJar);
 
         try {
-            // TODO: 1. 拉取代码 (已跳过，直接使用本地路径)
+            // TODO: 1. 拉取代码
             
             // 2. 执行 SpotBugs
             String reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);

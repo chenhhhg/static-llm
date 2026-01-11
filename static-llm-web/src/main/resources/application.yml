@@ -11,9 +11,18 @@ spring:
         quartz:
           threadPool:
             threadCount: 5
+
 spotbugs:
   jar-path: D:\CodeDetectTool\spotbugs-4.9.8\lib\spotbugs.jar
   report-dir: D:\CodeDetectTool\reports\
+
+llm:
+  provider: deepseek
+  deepseek:
+    api-key: sk-058260311f7f4456843c0ab797ccde44
+    base-url: https://api.deepseek.com
+    model: deepseek-chat
+
 logging:
   level:
-    bupt.staticllm: debug
+    bupt.staticllm: info

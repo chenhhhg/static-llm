@@ -2,10 +2,12 @@ package bupt.staticllm.adapter.llm.impl;
 
 import bupt.staticllm.adapter.llm.LlmClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
+@ConditionalOnProperty(name = "llm.provider", havingValue = "mock", matchIfMissing = true)
 public class MockLlmClient implements LlmClient {
 
     @Override
@@ -19,4 +21,3 @@ public class MockLlmClient implements LlmClient {
                 "}";
     }
 }
-
