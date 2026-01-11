@@ -1,0 +1,19 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: static-llm
+  quartz:
+    job-store-type: memory # 暂时使用内存存储，生产环境建议用 jdbc
+    properties:
+      org:
+        quartz:
+          threadPool:
+            threadCount: 5
+spotbugs:
+  jar-path: D:\CodeDetectTool\spotbugs-4.9.8\lib\spotbugs.jar
+  report-dir: D:\CodeDetectTool\reports\
+logging:
+  level:
+    bupt.staticllm: debug
