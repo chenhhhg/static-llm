@@ -1,14 +1,15 @@
 package bupt.staticllm.web.controller;
 
-import bupt.staticllm.web.job.AnalysisJob;
+import bupt.staticllm.common.enums.ReturnCode;
+import bupt.staticllm.common.model.AnalysisTask;
+import bupt.staticllm.common.response.Result;
+import bupt.staticllm.web.model.request.FileAnalysisRequest;
+import bupt.staticllm.web.service.AnalysisTaskService;
 import lombok.extern.slf4j.Slf4j;
-import org.quartz.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.List;
 
 @Slf4j
 @RestController
@@ -16,58 +17,66 @@ import java.util.UUID;
 public class TaskController {
 
     @Autowired
-    private Scheduler scheduler;
+    private AnalysisTaskService taskService;
 
     /**
-     * 提交分析任务
-     * 参数示例：
-     * {
-     *   "targetJar": "D:\\JavaProject\\easypan-all\\easypan-java\\target\\easypan-1.0.jar",
-     *   "sourcePath": "D:\\JavaProject\\easypan-all\\easypan-java\\src\\main\\java",
-     *   "packageFilter": "com.easypan.-"
-     * }
+     * 1. 提交分析任务
      */
     @PostMapping("/submit")
-    public Map<String, Object> submitTask(@RequestBody Map<String, String> params) {
-        Map<String, Object> result = new HashMap<>();
+    public Result<Long> submitTask(@RequestBody FileAnalysisRequest request) {
         try {
-            String targetJar = params.get("targetJar");
-            String sourcePath = params.get("sourcePath");
-            String packageFilter = params.get("packageFilter");
-            
-            // 简单的ID生成
-            Long taskId = Math.abs(UUID.randomUUID().getMostSignificantBits());
-
-            // 构建 JobDetail
-            JobDetail jobDetail = JobBuilder.newJob(AnalysisJob.class)
-                    .withIdentity("analysisTask-" + taskId, "analysisGroup")
-                    .usingJobData("targetJar", targetJar)
-                    .usingJobData("sourcePath", sourcePath)
-                    .usingJobData("packageFilter", packageFilter)
-                    .usingJobData("taskId", taskId)
-                    .build();
-
-            // 构建 Trigger (立即执行)
-            Trigger trigger = TriggerBuilder.newTrigger()
-                    .withIdentity("trigger-" + taskId, "analysisGroup")
-                    .startNow()
-                    .build();
-
-            // 调度任务
-            scheduler.scheduleJob(jobDetail, trigger);
-
-            result.put("code", 200);
-            result.put("msg", "任务提交成功");
-            result.put("taskId", taskId);
-            
+            Long taskId = taskService.submitTask(request);
             log.info("任务已提交: {}", taskId);
-
-        } catch (SchedulerException e) {
-            log.error("任务调度失败", e);
-            result.put("code", 500);
-            result.put("msg", "任务提交失败: " + e.getMessage());
+            return Result.success(taskId);
+        } catch (Exception e) {
+            log.error("任务提交失败", e);
+            return Result.fail("任务提交失败: " + e.getMessage());
         }
-        return result;
+    }
+
+    /**
+     * 2. 查询任务详情
+     */
+    @GetMapping("/{taskId}")
+    public Result<AnalysisTask> getTask(@PathVariable Long taskId) {
+        AnalysisTask task = taskService.getById(taskId);
+        if (task != null) {
+            return Result.success(task);
+        } else {
+            return Result.fail(ReturnCode.NOT_FOUND);
+        }
+    }
+
+    /**
+     * 3. 查询任务列表
+     */
+    @GetMapping("/list")
+    public Result<List<AnalysisTask>> listTasks() {
+        List<AnalysisTask> tasks = taskService.list();
+        return Result.success(tasks);
+    }
+
+    /**
+     * 4. 删除任务
+     */
+    @DeleteMapping("/{taskId}")
+    public Result<Void> deleteTask(@PathVariable Long taskId) {
+        if (taskService.removeById(taskId)) {
+            return Result.success();
+        } else {
+            return Result.fail("删除失败或任务不存在");
+        }
+    }
+
+    /**
+     * 5. 取消任务
+     */
+    @PostMapping("/cancel/{taskId}")
+    public Result<Void> cancelTask(@PathVariable Long taskId) {
+        if (taskService.cancelTask(taskId)) {
+            return Result.success();
+        } else {
+            return Result.fail("取消失败：任务不存在或已完成");
+        }
     }
 }
-

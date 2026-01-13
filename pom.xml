@@ -29,10 +29,10 @@
     </properties>
 
     <dependencyManagement>
-        <dependencies>
+    <dependencies>
             <!-- Spring Boot Dependencies -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
                 <type>pom</type>
@@ -54,7 +54,7 @@
                 <groupId>com.example</groupId>
                 <artifactId>static-llm-core</artifactId>
                 <version>${project.version}</version>
-            </dependency>
+        </dependency>
 
             <!-- Utils -->
             <dependency>
@@ -67,17 +67,17 @@
                 <artifactId>fastjson2</artifactId>
                 <version>${fastjson2.version}</version>
             </dependency>
-            <dependency>
+        <dependency>
                 <groupId>org.dom4j</groupId>
                 <artifactId>dom4j</artifactId>
                 <version>${dom4j.version}</version>
-            </dependency>
-            <dependency>
+        </dependency>
+        <dependency>
                 <groupId>cn.hutool</groupId>
                 <artifactId>hutool-all</artifactId>
                 <version>${hutool.version}</version>
-            </dependency>
-        </dependencies>
+        </dependency>
+    </dependencies>
     </dependencyManagement>
 
     <build>
