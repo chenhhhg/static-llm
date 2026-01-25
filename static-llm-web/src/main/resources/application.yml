@@ -32,6 +32,14 @@ llm:
     base-url: https://api.deepseek.com
     model: deepseek-chat
 
+rag:
+  chroma:
+    base-url: http://47.93.170.211:8000
+    collection-name: static-llm-knowledge
+  ollama:
+    base-url: http://localhost:11434
+    embedding-model: bge-m3
+
 logging:
   level:
     bupt.staticllm: info

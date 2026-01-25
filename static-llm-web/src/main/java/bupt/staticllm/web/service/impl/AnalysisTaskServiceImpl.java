@@ -10,6 +10,7 @@ import bupt.staticllm.core.normalizer.SpotBugsNormalizer;
 import bupt.staticllm.web.mapper.AnalysisTaskMapper;
 import bupt.staticllm.web.model.request.FileAnalysisRequest;
 import bupt.staticllm.web.service.AnalysisTaskService;
+import bupt.staticllm.web.service.RagService;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.TypeReference;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -34,6 +35,9 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
     
     @Autowired
     private ContextExtractor contextExtractor;
+    
+    @Autowired
+    private RagService ragService; // 注入 RAG 服务
 
     @Autowired
     private LlmClient llmClient;
@@ -48,13 +52,11 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         task.setLlmModel("DeepSeek");
         task.setStatus(TaskStatus.SUBMITTED);
         
-        // 显式设置时间，作为自动填充失效时的兜底
         task.setCreatedTime(LocalDateTime.now());
         task.setUpdatedTime(LocalDateTime.now());
         
         this.save(task);
         
-        // 触发异步处理
         processTaskAsync(task);
         
         return task.getId();
@@ -66,7 +68,6 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         if (task == null) {
             return false;
         }
-        // 6之前任意阶段可取消
         if (task.getStatus().getCode() < TaskStatus.COMPLETED.getCode()) {
             task.setStatus(TaskStatus.CANCELLED);
             this.updateById(task);
@@ -88,7 +89,6 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
             updateTaskStatus(task.getId(), TaskStatus.ANALYZING);
             
-            // 从 Map 中获取参数
             Map<String, Object> params = task.getTaskParams();
             String targetJar = (String) params.get("targetJar");
             String sourcePath = (String) params.get("sourcePath");
@@ -97,12 +97,23 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
             String reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);
             if (isCancelled(task.getId())) return;
             
-            // 归一化
             List<UnifiedIssue> issues = normalizer.normalize(reportFile);
             
-            // 上下文提取
             log.info("开始提取源码上下文...");
             contextExtractor.enrichContext(issues, sourcePath);
+            
+            // --- RAG 增强步骤 ---
+            log.info("开始进行 RAG 知识检索...");
+            for (UnifiedIssue issue : issues) {
+                // 仅对 High 级别的或者特定规则进行检索，避免 API 调用过多（如果是本地 Embedding 则无所谓）
+                String query = "Fix pattern for " + issue.getRuleId() + " in Java";
+                String knowledge = ragService.retrieve(query);
+                if (knowledge != null && !knowledge.isEmpty()) {
+                    // 将知识附加到 issue 的描述或临时字段中，或者拼接在 CodeSnippet 后
+                    // 这里简单起见，追加到 CodeSnippet
+                    issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
+                }
+            }
             
             updateTaskStatus(task.getId(), TaskStatus.WAITING_LLM);
             if (isCancelled(task.getId())) return;
@@ -110,11 +121,11 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
             updateTaskStatus(task.getId(), TaskStatus.JUDGING);
             
             String promptContext = JSON.toJSONString(issues);
-            String systemPrompt = "你是一个代码审计专家。以下是静态分析工具发现的问题列表（JSON格式），每个问题都包含'codeSnippet'字段，其中提供了：\n" +
-                    "1. 出错类的重要字段\n" +
-                    "2. 出错方法的完整代码 (Level 0)\n" +
-                    "3. 该方法内部调用的其他方法的签名 (Level +1)\n\n" +
-                    "请根据这些上下文信息，仔细分析问题是否为误报，并给出修复建议。";
+            String systemPrompt = "你是一个代码审计专家。以下是静态分析工具发现的问题列表（JSON格式）。\n" +
+                    "每个问题包含了：\n" +
+                    "1. 源代码上下文 (Class/Method)\n" +
+                    "2. [RAG Knowledge Base Reference] 附带的修复建议知识库文档\n\n" +
+                    "请结合这些信息，分析问题是否误报，并给出最佳修复建议。";
             
             String llmResponse = llmClient.chat(systemPrompt, promptContext);
             if (isCancelled(task.getId())) return;

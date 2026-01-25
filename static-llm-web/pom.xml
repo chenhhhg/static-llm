@@ -11,6 +11,11 @@
 
     <artifactId>static-llm-web</artifactId>
 
+    <properties>
+        <!-- 回退到稳定的 0.35.0 版本 -->
+        <langchain4j.version>0.35.0</langchain4j.version>
+    </properties>
+
     <dependencies>
         <!-- Internal Modules -->
         <dependency>
@@ -47,6 +52,33 @@
         <dependency>
             <groupId>com.alibaba.fastjson2</groupId>
             <artifactId>fastjson2</artifactId>
+        </dependency>
+
+        <!-- LangChain4j -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <!-- 使用简单的本地 Embedding 模型 (基于 ONNX) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-all-minilm-l6-v2-q</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- Ollama 支持 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-ollama</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- ChromaDB 支持 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-chroma</artifactId>
+            <version>${langchain4j.version}</version>
         </dependency>
     </dependencies>
 
