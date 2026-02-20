@@ -1,0 +1,15 @@
+工程脚手架: 建立了 Maven 多模块结构。
+静态分析接入: 封装了 SpotBugs 的命令行调用，并解析其 XML 报告为统一格式。
+LLM 接入: 完成了 DeepSeek API 的对接。
+任务管理:
+移除了 Quartz，改为基于 MySQL 的持久化任务队列。
+实现了 SUBMITTED -> COMPLETED 的完整状态流转。
+实现了异步执行 (@Async) 与任务取消机制。
+源码上下文提取: 使用 JavaParser 提取出错方法的完整代码及被调用方法的签名 (Context Level +1)。
+RAG 系统 (进阶版):
+集成了 ChromaDB (向量存储) 和 Ollama/BGE-M3 (Embedding)。
+实现了知识检索接口，并在 LLM 调用前自动增强 Prompt。
+实现了动态知识添加接口 (POST /api/knowledge/add)。
+🚧 待优化/进行中
+代码获取: 目前仅支持分析本地路径，Git Clone 功能预留了 TODO。
+上下文深度: Call Graph 目前仅向下搜索一层 (Callee)，尚未实现向上搜索 (Caller)。

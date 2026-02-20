@@ -1,12 +1,18 @@
 package bupt.staticllm.web.service.impl;
 
 import bupt.staticllm.adapter.analysis.StaticAnalysisService;
-import bupt.staticllm.adapter.llm.LlmClient;
 import bupt.staticllm.common.enums.TaskStatus;
 import bupt.staticllm.common.model.AnalysisTask;
 import bupt.staticllm.common.model.UnifiedIssue;
 import bupt.staticllm.core.extractor.ContextExtractor;
 import bupt.staticllm.core.normalizer.SpotBugsNormalizer;
+import bupt.staticllm.web.context.AnalysisContextHolder;
+import bupt.staticllm.web.llm.agent.CodeAuditAgent;
+import bupt.staticllm.common.model.AnalysisIssue;
+import bupt.staticllm.web.llm.model.AuditResult;
+import bupt.staticllm.web.mapper.AnalysisIssueMapper;
+import java.util.ArrayList;
+
 import bupt.staticllm.web.mapper.AnalysisTaskMapper;
 import bupt.staticllm.web.model.request.FileAnalysisRequest;
 import bupt.staticllm.web.service.AnalysisTaskService;
@@ -40,7 +46,14 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
     private RagService ragService; // 注入 RAG 服务
 
     @Autowired
-    private LlmClient llmClient;
+    private CodeAuditAgent codeAuditAgent;
+
+    @Autowired
+    private AnalysisIssueMapper analysisIssueMapper;
+
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private AnalysisTaskService self;
 
     @Override
     public Long submitTask(FileAnalysisRequest request) {
@@ -57,7 +70,8 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         
         this.save(task);
         
-        processTaskAsync(task);
+        // 使用自我注入的 Bean 调用异步方法，确保 AOP 代理生效
+        self.processTaskAsync(task);
         
         return task.getId();
     }
@@ -104,15 +118,32 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
             
             // --- RAG 增强步骤 ---
             log.info("开始进行 RAG 知识检索...");
+            
+            // 准备入库 Issue 列表
+            List<AnalysisIssue> dbIssues = new ArrayList<>();
+
             for (UnifiedIssue issue : issues) {
-                // 仅对 High 级别的或者特定规则进行检索，避免 API 调用过多（如果是本地 Embedding 则无所谓）
+                // 1. RAG 检索
                 String query = "Fix pattern for " + issue.getRuleId() + " in Java";
                 String knowledge = ragService.retrieve(query);
                 if (knowledge != null && !knowledge.isEmpty()) {
-                    // 将知识附加到 issue 的描述或临时字段中，或者拼接在 CodeSnippet 后
-                    // 这里简单起见，追加到 CodeSnippet
-                    issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
+                     issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
                 }
+
+                // 2. 转换为 DB 实体并保存
+                AnalysisIssue dbIssue = new AnalysisIssue();
+                dbIssue.setTaskId(task.getId());
+                dbIssue.setToolName(issue.getToolName());
+                dbIssue.setRuleId(issue.getRuleId());
+                dbIssue.setSeverity(issue.getSeverity());
+                dbIssue.setFilePath(issue.getFilePath());
+                dbIssue.setStartLine(issue.getStartLine());
+                dbIssue.setEndLine(issue.getEndLine());
+                dbIssue.setMessage(issue.getMessage());
+                dbIssue.setCodeSnippet(issue.getCodeSnippet());
+                
+                analysisIssueMapper.insert(dbIssue);
+                dbIssues.add(dbIssue);
             }
             
             updateTaskStatus(task.getId(), TaskStatus.WAITING_LLM);
@@ -120,20 +151,52 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
             updateTaskStatus(task.getId(), TaskStatus.JUDGING);
             
-            String promptContext = JSON.toJSONString(issues);
-            String systemPrompt = "你是一个代码审计专家。以下是静态分析工具发现的问题列表（JSON格式）。\n" +
-                    "每个问题包含了：\n" +
-                    "1. 源代码上下文 (Class/Method)\n" +
-                    "2. [RAG Knowledge Base Reference] 附带的修复建议知识库文档\n\n" +
-                    "请结合这些信息，分析问题是否误报，并给出最佳修复建议。";
+            // 设置上下文路径，供 Tool 使用
+            AnalysisContextHolder.setSourcePath(sourcePath);
             
-            String llmResponse = llmClient.chat(systemPrompt, promptContext);
-            if (isCancelled(task.getId())) return;
+            try {
+                // 构建发给 LLM 的请求对象，只包含必要字段，最重要的是 ID
+                List<Map<String, Object>> promptIssues = new ArrayList<>();
+                for (AnalysisIssue dbIssue : dbIssues) {
+                    promptIssues.add(Map.of(
+                        "issueId", dbIssue.getId(),
+                        "ruleId", dbIssue.getRuleId(),
+                        "filePath", dbIssue.getFilePath(),
+                        "startLine", dbIssue.getStartLine(),
+                        "codeSnippet", dbIssue.getCodeSnippet()
+                    ));
+                }
 
-            task = this.getById(task.getId());
-            task.setStatus(TaskStatus.COMPLETED);
-            task.setResultSummary(llmResponse);
-            this.updateById(task);
+                String promptContext = JSON.toJSONString(promptIssues);
+                String userMessage = "请分析以下静态分析问题列表（JSON格式）：\n" +
+                        promptContext + "\n\n" +
+                        "每个问题包含了源代码片段和可能的修复建议。请务必使用工具读取文件确认上下文。\n" +
+                        "请返回符合 AuditResult 结构的 JSON 数据。";
+                
+                // 3. 调用 Agent 获取结构化结果
+                AuditResult result = codeAuditAgent.audit(userMessage);
+                if (isCancelled(task.getId())) return;
+
+                // 4. 更新数据库
+                if (result != null && result.getAnalyses() != null) {
+                    for (AuditResult.IssueAnalysis analysis : result.getAnalyses()) {
+                        AnalysisIssue issueToUpdate = new AnalysisIssue();
+                        issueToUpdate.setId(analysis.getIssueId());
+                        issueToUpdate.setIsFalsePositive(analysis.getIsFalsePositive());
+                        issueToUpdate.setAiReasoning(analysis.getReasoning());
+                        issueToUpdate.setAiSuggestion(analysis.getFixSuggestion());
+                        analysisIssueMapper.updateById(issueToUpdate);
+                    }
+                }
+
+                task = this.getById(task.getId());
+                task.setStatus(TaskStatus.COMPLETED);
+                task.setResultSummary("分析完成，共处理 " + dbIssues.size() + " 个问题。详情请查询 analysis_issue 表。");
+                this.updateById(task);
+            } finally {
+                // 清理上下文
+                AnalysisContextHolder.clear();
+            }
 
         } catch (Exception e) {
             log.error("任务执行失败 TaskID: " + task.getId(), e);

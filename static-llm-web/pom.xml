@@ -80,6 +80,13 @@
             <artifactId>langchain4j-chroma</artifactId>
             <version>${langchain4j.version}</version>
         </dependency>
+
+        <!-- OpenAI / DeepSeek 支持 (用于 Tool Use) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
