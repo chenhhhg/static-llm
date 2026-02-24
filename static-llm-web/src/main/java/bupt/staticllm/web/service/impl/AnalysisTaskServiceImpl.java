@@ -28,6 +28,10 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -54,6 +58,9 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
     @Autowired
     @org.springframework.context.annotation.Lazy
     private AnalysisTaskService self;
+
+    // 创建一个固定大小的线程池用于并发执行 LLM 审计任务
+    private final ExecutorService auditExecutor = Executors.newFixedThreadPool(10);
 
     @Override
     public Long submitTask(FileAnalysisRequest request) {
@@ -151,50 +158,73 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
             updateTaskStatus(task.getId(), TaskStatus.JUDGING);
             
-            // 设置上下文路径，供 Tool 使用
+            // 设置上下文路径，供 Tool 使用 (主线程设置一次，虽然并发任务里也会设置，但为了保险)
             AnalysisContextHolder.setSourcePath(sourcePath);
-            
+
+            dbIssues = List.of(dbIssues.get(0));
+
             try {
-                // 构建发给 LLM 的请求对象，只包含必要字段，最重要的是 ID
-                List<Map<String, Object>> promptIssues = new ArrayList<>();
-                for (AnalysisIssue dbIssue : dbIssues) {
-                    promptIssues.add(Map.of(
-                        "issueId", dbIssue.getId(),
-                        "ruleId", dbIssue.getRuleId(),
-                        "filePath", dbIssue.getFilePath(),
-                        "startLine", dbIssue.getStartLine(),
-                        "codeSnippet", dbIssue.getCodeSnippet()
-                    ));
-                }
+                // 3. 并发调用 Agent 获取结构化结果
+                AnalysisTask finalTask = task;
+                List<CompletableFuture<Void>> futures = dbIssues.stream()
+                    .map(dbIssue -> CompletableFuture.runAsync(() -> {
+                        try {
+                            // 在子线程中设置上下文路径
+                            AnalysisContextHolder.setSourcePath(sourcePath);
+                            
+                            // 构建单个 Issue 的 Prompt
+                            List<Map<String, Object>> promptIssues = new ArrayList<>();
+                            promptIssues.add(Map.of(
+                                "issueId", dbIssue.getId(),
+                                "ruleId", dbIssue.getRuleId(),
+                                "filePath", dbIssue.getFilePath(),
+                                "startLine", dbIssue.getStartLine(),
+                                "codeSnippet", dbIssue.getCodeSnippet()
+                            ));
 
-                String promptContext = JSON.toJSONString(promptIssues);
-                String userMessage = "请分析以下静态分析问题列表（JSON格式）：\n" +
-                        promptContext + "\n\n" +
-                        "每个问题包含了源代码片段和可能的修复建议。请务必使用工具读取文件确认上下文。\n" +
-                        "请返回符合 AuditResult 结构的 JSON 数据。";
-                
-                // 3. 调用 Agent 获取结构化结果
-                AuditResult result = codeAuditAgent.audit(userMessage);
+                            String promptContext = JSON.toJSONString(promptIssues);
+                            String userMessage = "请分析以下静态分析问题（JSON格式）：\n" +
+                                    promptContext + "\n\n" +
+                                    "该问题包含了源代码片段和可能的修复建议。请务必使用工具读取文件确认上下文。\n" +
+                                    "请返回符合 AuditResult 结构的 JSON 数据。";
+                            
+                            // 调用 Agent
+                            AuditResult result = codeAuditAgent.audit(userMessage);
+                            
+                            if (isCancelled(finalTask.getId())) return;
+
+                            // 4. 更新数据库
+                            if (result != null && result.getAnalyses() != null) {
+                                for (AuditResult.IssueAnalysis analysis : result.getAnalyses()) {
+                                    // 理论上只会有一个，但为了健壮性还是遍历
+                                    AnalysisIssue issueToUpdate = new AnalysisIssue();
+                                    issueToUpdate.setId(analysis.getIssueId());
+                                    issueToUpdate.setIsFalsePositive(analysis.getIsFalsePositive());
+                                    issueToUpdate.setAiReasoning(analysis.getReasoning());
+                                    issueToUpdate.setAiSuggestion(analysis.getFixSuggestion());
+                                    analysisIssueMapper.updateById(issueToUpdate);
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.error("单个 Issue 分析失败 IssueID: " + dbIssue.getId(), e);
+                        } finally {
+                            // 清理子线程上下文
+                            AnalysisContextHolder.clear();
+                        }
+                    }, auditExecutor))
+                    .collect(Collectors.toList());
+
+                // 等待所有任务完成
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
                 if (isCancelled(task.getId())) return;
-
-                // 4. 更新数据库
-                if (result != null && result.getAnalyses() != null) {
-                    for (AuditResult.IssueAnalysis analysis : result.getAnalyses()) {
-                        AnalysisIssue issueToUpdate = new AnalysisIssue();
-                        issueToUpdate.setId(analysis.getIssueId());
-                        issueToUpdate.setIsFalsePositive(analysis.getIsFalsePositive());
-                        issueToUpdate.setAiReasoning(analysis.getReasoning());
-                        issueToUpdate.setAiSuggestion(analysis.getFixSuggestion());
-                        analysisIssueMapper.updateById(issueToUpdate);
-                    }
-                }
 
                 task = this.getById(task.getId());
                 task.setStatus(TaskStatus.COMPLETED);
                 task.setResultSummary("分析完成，共处理 " + dbIssues.size() + " 个问题。详情请查询 analysis_issue 表。");
                 this.updateById(task);
             } finally {
-                // 清理上下文
+                // 清理主线程上下文
                 AnalysisContextHolder.clear();
             }
 
