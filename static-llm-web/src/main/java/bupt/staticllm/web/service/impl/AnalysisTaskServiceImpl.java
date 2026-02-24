@@ -13,6 +13,13 @@ import bupt.staticllm.web.llm.model.AuditResult;
 import bupt.staticllm.web.mapper.AnalysisIssueMapper;
 import java.util.ArrayList;
 
+import bupt.staticllm.common.model.AnalysisCache;
+import bupt.staticllm.web.mapper.AnalysisCacheMapper;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import bupt.staticllm.web.mapper.AnalysisTaskMapper;
 import bupt.staticllm.web.model.request.FileAnalysisRequest;
 import bupt.staticllm.web.service.AnalysisTaskService;
@@ -54,6 +61,9 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
     @Autowired
     private AnalysisIssueMapper analysisIssueMapper;
+
+    @Autowired
+    private AnalysisCacheMapper analysisCacheMapper;
 
     @Autowired
     @org.springframework.context.annotation.Lazy
@@ -115,7 +125,47 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
             String sourcePath = (String) params.get("sourcePath");
             String packageFilter = (String) params.get("packageFilter");
 
-            String reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);
+            // --- 秒传机制 Start ---
+            String reportFile = null;
+            String jarMd5 = null;
+            try {
+                jarMd5 = calculateMd5(new File(targetJar));
+                AnalysisCache cache = analysisCacheMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisCache>()
+                        .eq(AnalysisCache::getFileMd5, jarMd5)
+                );
+                
+                if (cache != null) {
+                    File cachedReport = new File(cache.getReportPath());
+                    if (cachedReport.exists()) {
+                        log.info("命中分析缓存，Jar MD5: {}, 报告路径: {}", jarMd5, cache.getReportPath());
+                        reportFile = cache.getReportPath();
+                    } else {
+                        log.warn("分析缓存命中但文件不存在，将重新分析。MD5: {}", jarMd5);
+                        analysisCacheMapper.deleteById(cache.getId());
+                    }
+                }
+            } catch (Exception e) {
+                log.error("计算MD5或查询缓存失败，将继续执行常规分析", e);
+            }
+            // --- 秒传机制 End ---
+
+            if (reportFile == null) {
+                reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);
+                
+                // 保存缓存
+                if (jarMd5 != null && reportFile != null) {
+                    try {
+                        AnalysisCache newCache = new AnalysisCache();
+                        newCache.setFileMd5(jarMd5);
+                        newCache.setReportPath(reportFile);
+                        analysisCacheMapper.insert(newCache);
+                    } catch (Exception e) {
+                        log.warn("保存分析缓存失败", e);
+                    }
+                }
+            }
+
             if (isCancelled(task.getId())) return;
             
             List<UnifiedIssue> issues = normalizer.normalize(reportFile);
@@ -253,5 +303,22 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         task.setId(taskId);
         task.setStatus(status);
         this.updateById(task);
+    }
+
+    private String calculateMd5(File file) throws IOException, NoSuchAlgorithmException {
+        MessageDigest digest = MessageDigest.getInstance("MD5");
+        try (FileInputStream fis = new FileInputStream(file)) {
+            byte[] byteArray = new byte[1024];
+            int bytesCount = 0;
+            while ((bytesCount = fis.read(byteArray)) != -1) {
+                digest.update(byteArray, 0, bytesCount);
+            }
+        }
+        byte[] bytes = digest.digest();
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 }
