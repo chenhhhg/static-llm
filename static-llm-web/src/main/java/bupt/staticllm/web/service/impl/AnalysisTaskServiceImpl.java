@@ -1,6 +1,7 @@
 package bupt.staticllm.web.service.impl;
 
 import bupt.staticllm.adapter.analysis.StaticAnalysisService;
+import bupt.staticllm.common.enums.IssueStatus;
 import bupt.staticllm.common.enums.TaskStatus;
 import bupt.staticllm.common.model.AnalysisTask;
 import bupt.staticllm.common.model.UnifiedIssue;
@@ -71,6 +72,9 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
     // 创建一个固定大小的线程池用于并发执行 LLM 审计任务
     private final ExecutorService auditExecutor = Executors.newFixedThreadPool(10);
+
+    // 自定义 RAG 检索并发线程池，并发量 50
+    private final ExecutorService ragExecutor = Executors.newFixedThreadPool(80);
 
     @Override
     public Long submitTask(FileAnalysisRequest request) {
@@ -177,31 +181,52 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
             log.info("开始进行 RAG 知识检索...");
             
             // 准备入库 Issue 列表
-            List<AnalysisIssue> dbIssues = new ArrayList<>();
 
-            for (UnifiedIssue issue : issues) {
-                // 1. RAG 检索
-                String query = "Fix pattern for " + issue.getRuleId() + " in Java";
-                String knowledge = ragService.retrieve(query);
-                if (knowledge != null && !knowledge.isEmpty()) {
-                     issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
-                }
+            // 使用自定义的线程池并发处理 RAG 检索和数据库入库
+            AnalysisTask finalTask1 = task;
+            List<CompletableFuture<AnalysisIssue>> ragFutures = issues.stream()
+                .map(issue -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        // 1. RAG 检索
+                        String query = String.format(
+                                "How to fix SpotBugs rule '%s': %s",
+                                issue.getRuleId(),     // 规则ID
+                                issue.getMessage()    // 具体的错误信息（通常包含更具体的上下文描述）
+                        );
+                        String knowledge = ragService.retrieve(query);
+                        if (knowledge != null && !knowledge.isEmpty()) {
+                             issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
+                        }
+        
+                        // 2. 转换为 DB 实体并保存
+                        AnalysisIssue dbIssue = new AnalysisIssue();
+                        dbIssue.setTaskId(finalTask1.getId());
+                        dbIssue.setToolName(issue.getToolName());
+                        dbIssue.setRuleId(issue.getRuleId());
+                        dbIssue.setSeverity(issue.getSeverity());
+                        dbIssue.setFilePath(issue.getFilePath());
+                        dbIssue.setStartLine(issue.getStartLine());
+                        dbIssue.setEndLine(issue.getEndLine());
+                        dbIssue.setMessage(issue.getMessage());
+                        dbIssue.setCodeSnippet(issue.getCodeSnippet());
+                        dbIssue.setStatus(IssueStatus.RAG_COMPLETED); // RAG 完成
+                        
+                        analysisIssueMapper.insert(dbIssue);
+                        return dbIssue;
+                    } catch (Exception e) {
+                        log.error("RAG检索或入库失败", e);
+                        return null;
+                    }
+                }, ragExecutor))
+                .toList();
 
-                // 2. 转换为 DB 实体并保存
-                AnalysisIssue dbIssue = new AnalysisIssue();
-                dbIssue.setTaskId(task.getId());
-                dbIssue.setToolName(issue.getToolName());
-                dbIssue.setRuleId(issue.getRuleId());
-                dbIssue.setSeverity(issue.getSeverity());
-                dbIssue.setFilePath(issue.getFilePath());
-                dbIssue.setStartLine(issue.getStartLine());
-                dbIssue.setEndLine(issue.getEndLine());
-                dbIssue.setMessage(issue.getMessage());
-                dbIssue.setCodeSnippet(issue.getCodeSnippet());
-                
-                analysisIssueMapper.insert(dbIssue);
-                dbIssues.add(dbIssue);
-            }
+            // 等待所有任务完成并将结果添加到 dbIssues 列表
+            CompletableFuture.allOf(ragFutures.toArray(new CompletableFuture[0])).join();
+            
+            // 收集非空结果
+            List<AnalysisIssue> dbIssues = ragFutures.stream()
+                    .map(CompletableFuture::join)
+                    .filter(java.util.Objects::nonNull).collect(Collectors.toList());
             
             updateTaskStatus(task.getId(), TaskStatus.WAITING_LLM);
             if (isCancelled(task.getId())) return;
@@ -252,11 +277,16 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                                     issueToUpdate.setIsFalsePositive(analysis.getIsFalsePositive());
                                     issueToUpdate.setAiReasoning(analysis.getReasoning());
                                     issueToUpdate.setAiSuggestion(analysis.getFixSuggestion());
+                                    issueToUpdate.setStatus(IssueStatus.COMPLETED); // LLM 分析完成
                                     analysisIssueMapper.updateById(issueToUpdate);
                                 }
                             }
                         } catch (Exception e) {
                             log.error("单个 Issue 分析失败 IssueID: " + dbIssue.getId(), e);
+                            AnalysisIssue failedIssue = new AnalysisIssue();
+                            failedIssue.setId(dbIssue.getId());
+                            failedIssue.setStatus(IssueStatus.FAILED);
+                            analysisIssueMapper.updateById(failedIssue);
                         } finally {
                             // 清理子线程上下文
                             AnalysisContextHolder.clear();

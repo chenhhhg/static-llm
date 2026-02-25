@@ -23,7 +23,7 @@ public class KnowledgeServiceImpl extends ServiceImpl<KnowledgeMapper, Knowledge
         // 1. 保存到数据库
         Knowledge knowledge = new Knowledge();
         knowledge.setTitle(title);
-        knowledge.setContent(content);
+        knowledge.setContent(content.substring(0, 200));
         this.save(knowledge);
 
         // 2. 同步到向量库

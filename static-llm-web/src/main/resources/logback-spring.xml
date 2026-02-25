@@ -40,7 +40,6 @@
     <!-- 记录 LangChain4j 的交互日志到单独文件 -->
     <logger name="dev.langchain4j" level="DEBUG" additivity="false">
         <appender-ref ref="LLM_FILE" />
-        <appender-ref ref="CONSOLE" />
     </logger>
 
     <!-- 记录 Agent 和 Tool 的日志 -->

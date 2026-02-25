@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS `analysis_issue` (
   `end_line` int(11) DEFAULT NULL COMMENT '结束行',
   `message` text COMMENT '原始报错信息',
   `code_snippet` text COMMENT '源码片段',
+  `status` tinyint(4) NOT NULL DEFAULT 0 COMMENT '处理状态: 0-待处理, 1-RAG检索中, 2-RAG已完成, 3-LLM分析中, 4-已完成, 99-失败',
   `is_false_positive` tinyint(1) DEFAULT 0 COMMENT '是否误报',
   `ai_reasoning` text COMMENT 'AI分析依据',
   `ai_suggestion` text COMMENT 'AI修复建议',

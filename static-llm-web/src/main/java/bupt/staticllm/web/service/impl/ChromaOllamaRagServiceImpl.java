@@ -55,7 +55,7 @@ public class ChromaOllamaRagServiceImpl implements RagService {
             this.embeddingModel = OllamaEmbeddingModel.builder()
                     .baseUrl(ollamaBaseUrl)
                     .modelName(ollamaModelName)
-                    .timeout(Duration.ofSeconds(60))
+                    .timeout(Duration.ofSeconds(600))
                     .build();
 
             // 2. 初始化 Chroma 向量库
@@ -64,6 +64,7 @@ public class ChromaOllamaRagServiceImpl implements RagService {
                     .collectionName(collectionName)
                     .logRequests(true)
                     .logResponses(true)
+                    .timeout(Duration.ofSeconds(600))
                     .build();
 
             // 3. 构建检索器

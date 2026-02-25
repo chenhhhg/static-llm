@@ -1,5 +1,6 @@
 package bupt.staticllm.common.model;
 
+import bupt.staticllm.common.enums.IssueStatus;
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
@@ -15,6 +16,11 @@ public class AnalysisIssue implements Serializable {
     private Long id;
 
     private Long taskId;
+    
+    /**
+     * 处理状态
+     */
+    private IssueStatus status;
 
     private String toolName;
     private String ruleId;
