@@ -3,13 +3,12 @@ package bupt.staticllm.web.controller;
 import bupt.staticllm.common.model.AnalysisIssue;
 import bupt.staticllm.common.response.Result;
 import bupt.staticllm.web.service.AnalysisIssueService;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @Slf4j
 @RestController
@@ -22,8 +21,10 @@ public class AnalysisIssueController {
 
     @Operation(summary = "根据任务ID查询问题列表")
     @GetMapping("/list/{taskId}")
-    public Result<List<AnalysisIssue>> listByTaskId(@PathVariable Long taskId) {
-        List<AnalysisIssue> issues = analysisIssueService.getByTaskId(taskId);
+    public Result<IPage<AnalysisIssue>> listByTaskId(@PathVariable Long taskId,
+                                                     @RequestParam(defaultValue = "1") int page,
+                                                     @RequestParam(defaultValue = "10") int size) {
+        IPage<AnalysisIssue> issues = analysisIssueService.getByTaskId(taskId, page, size);
         return Result.success(issues);
     }
 
