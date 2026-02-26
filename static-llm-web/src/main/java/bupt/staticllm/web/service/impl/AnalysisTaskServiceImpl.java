@@ -30,6 +30,8 @@ import com.alibaba.fastjson2.TypeReference;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -43,7 +45,7 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, AnalysisTask> implements AnalysisTaskService {
+public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, AnalysisTask> implements AnalysisTaskService, ApplicationRunner {
 
     @Autowired
     private StaticAnalysisService spotBugsAdapter;
@@ -71,10 +73,29 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
     private AnalysisTaskService self;
 
     // 创建一个固定大小的线程池用于并发执行 LLM 审计任务
-    private final ExecutorService auditExecutor = Executors.newFixedThreadPool(10);
+    private final ExecutorService auditExecutor = Executors.newFixedThreadPool(1);
 
     // 自定义 RAG 检索并发线程池，并发量 50
     private final ExecutorService ragExecutor = Executors.newFixedThreadPool(80);
+
+    // 任务级线程池，用于执行 processTaskAsync 抽离出的任务
+    private final ExecutorService taskExecutor = Executors.newFixedThreadPool(5);
+
+    @Override
+    public void run(ApplicationArguments args) throws Exception {
+        log.info("系统启动，开始扫描未完成的任务...");
+        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
+                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
+
+        if (tasks != null && !tasks.isEmpty()) {
+            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
+            for (AnalysisTask task : tasks) {
+                taskExecutor.submit(() -> executeTask(task));
+            }
+        } else {
+            log.info("没有发现未完成的任务");
+        }
+    }
 
     @Override
     public Long submitTask(FileAnalysisRequest request) {
@@ -91,8 +112,8 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         
         this.save(task);
         
-        // 使用自我注入的 Bean 调用异步方法，确保 AOP 代理生效
-        self.processTaskAsync(task);
+        // 提交到线程池执行
+        taskExecutor.submit(() -> executeTask(task));
         
         return task.getId();
     }
@@ -111,175 +132,219 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
         return false;
     }
 
-    @Async
     @Override
     public void processTaskAsync(AnalysisTask task) {
-        log.info("开始执行异步任务 TaskID: {}", task.getId());
+        // 保留该方法以兼容接口定义，但实际上逻辑已移至 executeTask
+        // 如果外部还有调用此方法的地方，建议改为调用 executeTask 或通过 submitTask 触发
+        taskExecutor.submit(() -> executeTask(task));
+    }
+
+    private void executeTask(AnalysisTask task) {
+        log.info("开始执行任务 TaskID: {}, 当前状态: {}", task.getId(), task.getStatus());
         
         try {
             if (isCancelled(task.getId())) return;
 
-            updateTaskStatus(task.getId(), TaskStatus.WAITING_ANALYSIS);
-            if (isCancelled(task.getId())) return;
-
-            updateTaskStatus(task.getId(), TaskStatus.ANALYZING);
-            
             Map<String, Object> params = task.getTaskParams();
             String targetJar = (String) params.get("targetJar");
             String sourcePath = (String) params.get("sourcePath");
             String packageFilter = (String) params.get("packageFilter");
 
-            // --- 秒传机制 Start ---
-            String reportFile = null;
-            String jarMd5 = null;
-            try {
-                jarMd5 = calculateMd5(new File(targetJar));
-                AnalysisCache cache = analysisCacheMapper.selectOne(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisCache>()
-                        .eq(AnalysisCache::getFileMd5, jarMd5)
-                );
+            // 阶段 1: 静态分析与入库 (如果尚未完成)
+            // 判定标准: 状态小于 WAITING_LLM (4)
+            if (task.getStatus().getCode() < TaskStatus.WAITING_LLM.getCode()) {
                 
-                if (cache != null) {
-                    File cachedReport = new File(cache.getReportPath());
-                    if (cachedReport.exists()) {
-                        log.info("命中分析缓存，Jar MD5: {}, 报告路径: {}", jarMd5, cache.getReportPath());
-                        reportFile = cache.getReportPath();
-                    } else {
-                        log.warn("分析缓存命中但文件不存在，将重新分析。MD5: {}", jarMd5);
-                        analysisCacheMapper.deleteById(cache.getId());
-                    }
-                }
-            } catch (Exception e) {
-                log.error("计算MD5或查询缓存失败，将继续执行常规分析", e);
-            }
-            // --- 秒传机制 End ---
+                updateTaskStatus(task.getId(), TaskStatus.WAITING_ANALYSIS);
+                if (isCancelled(task.getId())) return;
 
-            if (reportFile == null) {
-                reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);
+                updateTaskStatus(task.getId(), TaskStatus.ANALYZING);
                 
-                // 保存缓存
-                if (jarMd5 != null && reportFile != null) {
-                    try {
-                        AnalysisCache newCache = new AnalysisCache();
-                        newCache.setFileMd5(jarMd5);
-                        newCache.setReportPath(reportFile);
-                        analysisCacheMapper.insert(newCache);
-                    } catch (Exception e) {
-                        log.warn("保存分析缓存失败", e);
-                    }
-                }
-            }
+                // 为了安全起见，如果处于此阶段，先清理可能残留的部分 Issue 数据
+                analysisIssueMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisIssue>()
+                        .eq(AnalysisIssue::getTaskId, task.getId()));
 
-            if (isCancelled(task.getId())) return;
-            
-            List<UnifiedIssue> issues = normalizer.normalize(reportFile);
-            
-            log.info("开始提取源码上下文...");
-            contextExtractor.enrichContext(issues, sourcePath);
-            
-            // --- RAG 增强步骤 ---
-            log.info("开始进行 RAG 知识检索...");
-            
-            // 准备入库 Issue 列表
-
-            // 使用自定义的线程池并发处理 RAG 检索和数据库入库
-            AnalysisTask finalTask1 = task;
-            List<CompletableFuture<AnalysisIssue>> ragFutures = issues.stream()
-                .map(issue -> CompletableFuture.supplyAsync(() -> {
-                    try {
-                        // 1. RAG 检索
-                        String query = String.format(
-                                "How to fix SpotBugs rule '%s': %s",
-                                issue.getRuleId(),     // 规则ID
-                                issue.getMessage()    // 具体的错误信息（通常包含更具体的上下文描述）
-                        );
-                        String knowledge = ragService.retrieve(query);
-                        if (knowledge != null && !knowledge.isEmpty()) {
-                             issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
+                // --- 秒传机制 Start ---
+                String reportFile = null;
+                String jarMd5 = null;
+                try {
+                    jarMd5 = calculateMd5(new File(targetJar));
+                    AnalysisCache cache = analysisCacheMapper.selectOne(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisCache>()
+                            .eq(AnalysisCache::getFileMd5, jarMd5)
+                    );
+                    
+                    if (cache != null) {
+                        File cachedReport = new File(cache.getReportPath());
+                        if (cachedReport.exists()) {
+                            log.info("命中分析缓存，Jar MD5: {}, 报告路径: {}", jarMd5, cache.getReportPath());
+                            reportFile = cache.getReportPath();
+                        } else {
+                            log.warn("分析缓存命中但文件不存在，将重新分析。MD5: {}", jarMd5);
+                            analysisCacheMapper.deleteById(cache.getId());
                         }
-        
-                        // 2. 转换为 DB 实体并保存
-                        AnalysisIssue dbIssue = new AnalysisIssue();
-                        dbIssue.setTaskId(finalTask1.getId());
-                        dbIssue.setToolName(issue.getToolName());
-                        dbIssue.setRuleId(issue.getRuleId());
-                        dbIssue.setSeverity(issue.getSeverity());
-                        dbIssue.setFilePath(issue.getFilePath());
-                        dbIssue.setStartLine(issue.getStartLine());
-                        dbIssue.setEndLine(issue.getEndLine());
-                        dbIssue.setMessage(issue.getMessage());
-                        dbIssue.setCodeSnippet(issue.getCodeSnippet());
-                        dbIssue.setStatus(IssueStatus.RAG_COMPLETED); // RAG 完成
-                        
-                        analysisIssueMapper.insert(dbIssue);
-                        return dbIssue;
-                    } catch (Exception e) {
-                        log.error("RAG检索或入库失败", e);
-                        return null;
                     }
-                }, ragExecutor))
-                .toList();
+                } catch (Exception e) {
+                    log.error("计算MD5或查询缓存失败，将继续执行常规分析", e);
+                }
+                // --- 秒传机制 End ---
 
-            // 等待所有任务完成并将结果添加到 dbIssues 列表
-            CompletableFuture.allOf(ragFutures.toArray(new CompletableFuture[0])).join();
+                if (reportFile == null) {
+                    reportFile = spotBugsAdapter.executeAnalysis(targetJar, sourcePath, packageFilter);
+                    
+                    // 保存缓存
+                    if (jarMd5 != null && reportFile != null) {
+                        try {
+                            AnalysisCache newCache = new AnalysisCache();
+                            newCache.setFileMd5(jarMd5);
+                            newCache.setReportPath(reportFile);
+                            analysisCacheMapper.insert(newCache);
+                        } catch (Exception e) {
+                            log.warn("保存分析缓存失败", e);
+                        }
+                    }
+                }
+
+                if (isCancelled(task.getId())) return;
+                
+                List<UnifiedIssue> issues = normalizer.normalize(reportFile);
+                
+                log.info("开始提取源码上下文...");
+                contextExtractor.enrichContext(issues, sourcePath);
+                
+                // --- RAG 增强步骤 ---
+                log.info("开始进行 RAG 知识检索...");
+                
+                // 准备入库 Issue 列表
+                AnalysisTask finalTask1 = task;
+                List<CompletableFuture<AnalysisIssue>> ragFutures = issues.stream()
+                    .map(issue -> CompletableFuture.supplyAsync(() -> {
+                        try {
+                            // 1. RAG 检索
+                            String query = String.format(
+                                    "How to fix SpotBugs rule '%s': %s",
+                                    issue.getRuleId(),     // 规则ID
+                                    issue.getMessage()    // 具体的错误信息
+                            );
+                            String knowledge = ragService.retrieve(query);
+                            if (knowledge != null && !knowledge.isEmpty()) {
+                                 issue.setCodeSnippet(issue.getCodeSnippet() + "\n\n// [RAG Knowledge Base Reference]\n" + knowledge);
+                            }
             
-            // 收集非空结果
-            List<AnalysisIssue> dbIssues = ragFutures.stream()
-                    .map(CompletableFuture::join)
-                    .filter(java.util.Objects::nonNull).collect(Collectors.toList());
-            
-            updateTaskStatus(task.getId(), TaskStatus.WAITING_LLM);
+                            // 2. 转换为 DB 实体并保存
+                            AnalysisIssue dbIssue = new AnalysisIssue();
+                            dbIssue.setTaskId(finalTask1.getId());
+                            dbIssue.setToolName(issue.getToolName());
+                            dbIssue.setRuleId(issue.getRuleId());
+                            dbIssue.setSeverity(issue.getSeverity());
+                            dbIssue.setFilePath(issue.getFilePath());
+                            dbIssue.setStartLine(issue.getStartLine());
+                            dbIssue.setEndLine(issue.getEndLine());
+                            dbIssue.setMessage(issue.getMessage());
+                            dbIssue.setCodeSnippet(issue.getCodeSnippet());
+                            dbIssue.setStatus(IssueStatus.RAG_COMPLETED); // RAG 完成
+                            
+                            analysisIssueMapper.insert(dbIssue);
+                            return dbIssue;
+                        } catch (Exception e) {
+                            log.error("RAG检索或入库失败", e);
+                            return null;
+                        }
+                    }, ragExecutor))
+                    .toList();
+
+                // 等待所有任务完成
+                CompletableFuture.allOf(ragFutures.toArray(new CompletableFuture[0])).join();
+                
+                updateTaskStatus(task.getId(), TaskStatus.WAITING_LLM);
+            }
+
             if (isCancelled(task.getId())) return;
 
+            // 阶段 2: LLM 审计 (断点续传核心逻辑)
+            // 此时 DB 中应该已有 Issue 数据。我们查询未完成 LLM 分析的 Issue (aiSuggestion 为空)
             updateTaskStatus(task.getId(), TaskStatus.JUDGING);
             
             // 设置上下文路径，供 Tool 使用 (主线程设置一次，虽然并发任务里也会设置，但为了保险)
             AnalysisContextHolder.setSourcePath(sourcePath);
 
-            dbIssues = List.of(dbIssues.get(0));
+            // 查询待处理的 Issue (aiSuggestion 为空)
+            List<AnalysisIssue> pendingIssues = analysisIssueMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisIssue>()
+                    .eq(AnalysisIssue::getTaskId, task.getId())
+                    .isNull(AnalysisIssue::getAiSuggestion) // 核心判断依据
+            );
 
-            try {
-                // 3. 并发调用 Agent 获取结构化结果
+            if (pendingIssues != null && !pendingIssues.isEmpty()) {
+                log.info("TaskID: {} 还有 {} 个 Issue 等待 LLM 分析", task.getId(), pendingIssues.size());
+                
                 AnalysisTask finalTask = task;
-                List<CompletableFuture<Void>> futures = dbIssues.stream()
+                List<CompletableFuture<Void>> futures = pendingIssues.stream()
                     .map(dbIssue -> CompletableFuture.runAsync(() -> {
                         try {
                             // 在子线程中设置上下文路径
                             AnalysisContextHolder.setSourcePath(sourcePath);
                             
                             // 构建单个 Issue 的 Prompt
-                            List<Map<String, Object>> promptIssues = new ArrayList<>();
-                            promptIssues.add(Map.of(
+                            Map<String, Object> promptIssue = Map.of(
                                 "issueId", dbIssue.getId(),
                                 "ruleId", dbIssue.getRuleId(),
                                 "filePath", dbIssue.getFilePath(),
                                 "startLine", dbIssue.getStartLine(),
                                 "codeSnippet", dbIssue.getCodeSnippet()
-                            ));
+                            );
 
-                            String promptContext = JSON.toJSONString(promptIssues);
+                            String promptContext = JSON.toJSONString(promptIssue);
                             String userMessage = "请分析以下静态分析问题（JSON格式）：\n" +
                                     promptContext + "\n\n" +
                                     "该问题包含了源代码片段和可能的修复建议。请务必使用工具读取文件确认上下文。\n" +
                                     "请返回符合 AuditResult 结构的 JSON 数据。";
                             
                             // 调用 Agent
-                            AuditResult result = codeAuditAgent.audit(userMessage);
+                            String resultStr = codeAuditAgent.audit(userMessage);
+                            log.info("LLM Raw Response: {}", resultStr);
+                            
+                            AuditResult result = null;
+                            try {
+                                // 尝试提取 JSON 部分
+                                String jsonStr = resultStr;
+                                int jsonStart = resultStr.indexOf("{");
+                                int jsonEnd = resultStr.lastIndexOf("}");
+                                if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                                    jsonStr = resultStr.substring(jsonStart, jsonEnd + 1);
+                                }
+                                
+                                result = JSON.parseObject(jsonStr, AuditResult.class);
+                            } catch (Exception e) {
+                                // 尝试解析为列表并取第一个
+                                try {
+                                    String jsonStr = resultStr;
+                                    int jsonStart = resultStr.indexOf("[");
+                                    int jsonEnd = resultStr.lastIndexOf("]");
+                                    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                                        jsonStr = resultStr.substring(jsonStart, jsonEnd + 1);
+                                    }
+                                    
+                                    List<AuditResult> list = JSON.parseArray(jsonStr, AuditResult.class);
+                                    if (list != null && !list.isEmpty()) {
+                                        result = list.get(0);
+                                    }
+                                } catch (Exception ex) {
+                                    log.error("Failed to parse LLM response: {}", resultStr, ex);
+                                    throw ex;
+                                }
+                            }
                             
                             if (isCancelled(finalTask.getId())) return;
 
                             // 4. 更新数据库
-                            if (result != null && result.getAnalyses() != null) {
-                                for (AuditResult.IssueAnalysis analysis : result.getAnalyses()) {
-                                    // 理论上只会有一个，但为了健壮性还是遍历
-                                    AnalysisIssue issueToUpdate = new AnalysisIssue();
-                                    issueToUpdate.setId(analysis.getIssueId());
-                                    issueToUpdate.setIsFalsePositive(analysis.getIsFalsePositive());
-                                    issueToUpdate.setAiReasoning(analysis.getReasoning());
-                                    issueToUpdate.setAiSuggestion(analysis.getFixSuggestion());
-                                    issueToUpdate.setStatus(IssueStatus.COMPLETED); // LLM 分析完成
-                                    analysisIssueMapper.updateById(issueToUpdate);
-                                }
+                            if (result != null) {
+                                AnalysisIssue issueToUpdate = new AnalysisIssue();
+                                issueToUpdate.setId(result.getIssueId());
+                                issueToUpdate.setIsFalsePositive(result.getIsFalsePositive());
+                                issueToUpdate.setAiReasoning(result.getReasoning());
+                                issueToUpdate.setAiSuggestion(result.getFixSuggestion());
+                                issueToUpdate.setStatus(IssueStatus.COMPLETED); // LLM 分析完成
+                                analysisIssueMapper.updateById(issueToUpdate);
                             }
                         } catch (Exception e) {
                             log.error("单个 Issue 分析失败 IssueID: " + dbIssue.getId(), e);
@@ -292,21 +357,26 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                             AnalysisContextHolder.clear();
                         }
                     }, auditExecutor))
-                    .collect(Collectors.toList());
+                    .toList();
 
                 // 等待所有任务完成
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-                if (isCancelled(task.getId())) return;
-
-                task = this.getById(task.getId());
-                task.setStatus(TaskStatus.COMPLETED);
-                task.setResultSummary("分析完成，共处理 " + dbIssues.size() + " 个问题。详情请查询 analysis_issue 表。");
-                this.updateById(task);
-            } finally {
-                // 清理主线程上下文
-                AnalysisContextHolder.clear();
+            } else {
+                log.info("TaskID: {} 所有 Issue 已完成 LLM 分析", task.getId());
             }
+
+            if (isCancelled(task.getId())) return;
+
+            // 统计最终结果
+            Long totalIssues = analysisIssueMapper.selectCount(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisIssue>()
+                    .eq(AnalysisIssue::getTaskId, task.getId())
+            );
+
+            task = this.getById(task.getId());
+            task.setStatus(TaskStatus.COMPLETED);
+            task.setResultSummary("分析完成，共处理 " + totalIssues + " 个问题。详情请查询 analysis_issue 表。");
+            this.updateById(task);
 
         } catch (Exception e) {
             log.error("任务执行失败 TaskID: " + task.getId(), e);
@@ -316,6 +386,9 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                 t.setResultSummary("执行失败: " + e.getMessage());
                 this.updateById(t);
             }
+        } finally {
+            // 清理主线程上下文
+            AnalysisContextHolder.clear();
         }
     }
 
