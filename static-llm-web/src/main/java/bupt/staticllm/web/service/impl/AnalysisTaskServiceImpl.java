@@ -84,17 +84,17 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
     @Override
     public void run(ApplicationArguments args) throws Exception {
         log.info("系统启动，开始扫描未完成的任务...");
-//        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
-//                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
-//
-//        if (tasks != null && !tasks.isEmpty()) {
-//            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
-//            for (AnalysisTask task : tasks) {
-//                taskExecutor.submit(() -> executeTask(task));
-//            }
-//        } else {
-//            log.info("没有发现未完成的任务");
-//        }
+        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
+                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
+
+        if (tasks != null && !tasks.isEmpty()) {
+            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
+            for (AnalysisTask task : tasks) {
+                taskExecutor.submit(() -> executeTask(task));
+            }
+        } else {
+            log.info("没有发现未完成的任务");
+        }
     }
 
     @Override
@@ -305,31 +305,51 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                             
                             AuditResult result = null;
                             try {
-                                // 尝试提取 JSON 部分
-                                String jsonStr = resultStr;
-                                int jsonStart = resultStr.indexOf("{");
-                                int jsonEnd = resultStr.lastIndexOf("}");
-                                if (jsonStart >= 0 && jsonEnd > jsonStart) {
-                                    jsonStr = resultStr.substring(jsonStart, jsonEnd + 1);
+                                // 增强的解析逻辑
+                                String jsonContent = resultStr;
+                                // 1. 尝试提取 Markdown 代码块
+                                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("```json\\s*([\\s\\S]*?)\\s*```");
+                                java.util.regex.Matcher matcher = pattern.matcher(resultStr);
+                                if (matcher.find()) {
+                                    jsonContent = matcher.group(1);
                                 }
-                                
-                                result = JSON.parseObject(jsonStr, AuditResult.class);
+
+                                // 2. 尝试解析对象
+                                String objectStr = jsonContent;
+                                int jsonStart = jsonContent.indexOf("{");
+                                int jsonEnd = jsonContent.lastIndexOf("}");
+                                if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                                    objectStr = jsonContent.substring(jsonStart, jsonEnd + 1);
+                                    result = JSON.parseObject(objectStr, AuditResult.class);
+                                } else {
+                                    throw new RuntimeException("No JSON object found in content");
+                                }
                             } catch (Exception e) {
-                                // 尝试解析为列表并取第一个
+                                // 3. 尝试解析数组
                                 try {
-                                    String jsonStr = resultStr;
-                                    int jsonStart = resultStr.indexOf("[");
-                                    int jsonEnd = resultStr.lastIndexOf("]");
-                                    if (jsonStart >= 0 && jsonEnd > jsonStart) {
-                                        jsonStr = resultStr.substring(jsonStart, jsonEnd + 1);
+                                    // 重新从 resultStr 或 jsonContent 中尝试提取数组？
+                                    // 这里使用 jsonContent (可能已去除 markdown)
+                                    String jsonContent = resultStr;
+                                    java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)\\s*```");
+                                    java.util.regex.Matcher matcher = pattern.matcher(resultStr);
+                                    if (matcher.find()) {
+                                        jsonContent = matcher.group(1);
                                     }
                                     
-                                    List<AuditResult> list = JSON.parseArray(jsonStr, AuditResult.class);
-                                    if (list != null && !list.isEmpty()) {
-                                        result = list.get(0);
+                                    String arrayStr = jsonContent;
+                                    int jsonStart = jsonContent.indexOf("[");
+                                    int jsonEnd = jsonContent.lastIndexOf("]");
+                                    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                                        arrayStr = jsonContent.substring(jsonStart, jsonEnd + 1);
+                                        List<AuditResult> list = JSON.parseArray(arrayStr, AuditResult.class);
+                                        if (list != null && !list.isEmpty()) {
+                                            result = list.get(0);
+                                        }
+                                    } else {
+                                        throw e;
                                     }
                                 } catch (Exception ex) {
-                                    log.error("Failed to parse LLM response: {}", resultStr, ex);
+                                    log.error("Failed to parse LLM response. Raw: {}", resultStr, ex);
                                     throw ex;
                                 }
                             }
