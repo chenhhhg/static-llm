@@ -17,10 +17,65 @@ public class OwaspBenchmarkStrategy implements EvaluationStrategy {
 
     static {
         // SpotBugs types to OWASP categories
+        
+        // SQL Injection
         CATEGORY_MAPPING.put("SQL_INJECTION", "sql-injection");
+        CATEGORY_MAPPING.put("SQL_INJECTION_PREPARED_STATEMENT", "sql-injection");
+        CATEGORY_MAPPING.put("SQL_INJECTION_TURBINE", "sql-injection");
+        CATEGORY_MAPPING.put("SQL_INJECTION_HIBERNATE", "sql-injection");
+        CATEGORY_MAPPING.put("SQL_INJECTION_JDO", "sql-injection");
+        CATEGORY_MAPPING.put("SQL_INJECTION_JPA", "sql-injection");
         CATEGORY_MAPPING.put("SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "sql-injection");
+
+        // Command Injection
+        CATEGORY_MAPPING.put("COMMAND_INJECTION", "cmdi");
+        CATEGORY_MAPPING.put("OS_COMMAND_INJECTION", "cmdi");
+
+        // Path Traversal
+        CATEGORY_MAPPING.put("PATH_TRAVERSAL_IN", "path-traversal");
+        CATEGORY_MAPPING.put("PATH_TRAVERSAL_OUT", "path-traversal");
+
+        // LDAP Injection
+        CATEGORY_MAPPING.put("LDAP_INJECTION", "ldap");
+
+        // XPath Injection
+        CATEGORY_MAPPING.put("XPATH_INJECTION", "xpath");
+
+        // XSS
         CATEGORY_MAPPING.put("XSS_REQUEST_PARAMETER_TO_SERVLET_WRITER", "xss");
         CATEGORY_MAPPING.put("XSS_REQUEST_PARAMETER_TO_SEND_ERROR", "xss");
+        CATEGORY_MAPPING.put("XSS_SERVLET", "xss");
+        CATEGORY_MAPPING.put("XSS_JSP_PRINT", "xss");
+        CATEGORY_MAPPING.put("XSS_ATTRIBUTE", "xss");
+
+        // Weak Cryptography
+        CATEGORY_MAPPING.put("CIPHER_INTEGRITY", "crypto");
+        CATEGORY_MAPPING.put("DES_USAGE", "crypto");
+        CATEGORY_MAPPING.put("ECB_MODE", "crypto");
+        CATEGORY_MAPPING.put("STATIC_IV", "crypto");
+        CATEGORY_MAPPING.put("UNENCRYPTED_SOCKET", "crypto");
+        CATEGORY_MAPPING.put("RSA_NO_PADDING", "crypto");
+        CATEGORY_MAPPING.put("RSA_KEY_SIZE", "crypto");
+        CATEGORY_MAPPING.put("PADDING_ORACLE", "crypto");
+
+        // Weak Hashing
+        // Note: OWASP Benchmark v1.2 distinguishes 'hash' from 'crypto'.
+        CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_MD5", "hash");
+        CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_SHA1", "hash");
+        CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_MD2", "hash");
+        CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_MD4", "hash");
+
+        // Weak Random
+        CATEGORY_MAPPING.put("PREDICTABLE_RANDOM", "weak-random");
+
+        // Secure Cookie
+        CATEGORY_MAPPING.put("HTTPONLY_COOKIE", "secure-cookie");
+        CATEGORY_MAPPING.put("SECURE_COOKIE", "secure-cookie");
+        CATEGORY_MAPPING.put("INSECURE_COOKIE", "secure-cookie");
+
+        // Trust Boundary
+        CATEGORY_MAPPING.put("TRUST_BOUNDARY_VIOLATION", "trust-boundary");
+        
         // Add more mappings as needed
     }
 

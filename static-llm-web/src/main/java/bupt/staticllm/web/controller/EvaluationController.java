@@ -2,6 +2,7 @@ package bupt.staticllm.web.controller;
 
 import bupt.staticllm.common.response.Result;
 import bupt.staticllm.core.evaluation.model.EvaluationReport;
+import bupt.staticllm.web.model.request.EvaluateRequest;
 import bupt.staticllm.web.service.EvaluationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -18,12 +19,12 @@ public class EvaluationController {
 
     @Operation(summary = "执行评估")
     @PostMapping("/evaluate")
-    public Result<EvaluationReport> evaluate(
-            @RequestParam Long taskId,
-            @RequestParam(defaultValue = "OWASP-1.2") String benchmarkType,
-            @RequestParam String benchmarkPath) {
+    public Result<EvaluationReport> evaluate(@RequestBody EvaluateRequest request) {
         
-        EvaluationReport report = evaluationService.evaluateTask(taskId, benchmarkType, benchmarkPath);
+        EvaluationReport report = evaluationService.evaluateTask(
+                request.getTaskId(),
+                request.getBenchmarkType(),
+                request.getBenchmarkPath());
         return Result.success(report);
     }
 }
