@@ -13,33 +13,34 @@ import java.util.Map;
 @Component
 public class OwaspBenchmarkStrategy implements EvaluationStrategy {
 
-    private static final Map<String, String> CATEGORY_MAPPING = new HashMap<>();
+    public static final Map<String, String> CATEGORY_MAPPING = new HashMap<>();
 
     static {
         // SpotBugs types to OWASP categories
         
-        // SQL Injection
-        CATEGORY_MAPPING.put("SQL_INJECTION", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_INJECTION_PREPARED_STATEMENT", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_INJECTION_TURBINE", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_INJECTION_HIBERNATE", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_INJECTION_JDO", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_INJECTION_JPA", "sql-injection");
-        CATEGORY_MAPPING.put("SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "sql-injection");
+        // SQL Injection -> CSV: sqli
+        CATEGORY_MAPPING.put("SQL_INJECTION", "sqli");
+        CATEGORY_MAPPING.put("SQL_INJECTION_PREPARED_STATEMENT", "sqli");
+        CATEGORY_MAPPING.put("SQL_INJECTION_TURBINE", "sqli");
+        CATEGORY_MAPPING.put("SQL_INJECTION_HIBERNATE", "sqli");
+        CATEGORY_MAPPING.put("SQL_INJECTION_JDO", "sqli");
+        CATEGORY_MAPPING.put("SQL_INJECTION_JPA", "sqli");
+        CATEGORY_MAPPING.put("SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "sqli");
+        CATEGORY_MAPPING.put("SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING", "sqli");
 
         // Command Injection
         CATEGORY_MAPPING.put("COMMAND_INJECTION", "cmdi");
         CATEGORY_MAPPING.put("OS_COMMAND_INJECTION", "cmdi");
 
-        // Path Traversal
-        CATEGORY_MAPPING.put("PATH_TRAVERSAL_IN", "path-traversal");
-        CATEGORY_MAPPING.put("PATH_TRAVERSAL_OUT", "path-traversal");
+        // Path Traversal -> CSV: pathtraver
+        CATEGORY_MAPPING.put("PATH_TRAVERSAL_IN", "pathtraver");
+        CATEGORY_MAPPING.put("PATH_TRAVERSAL_OUT", "pathtraver");
 
-        // LDAP Injection
-        CATEGORY_MAPPING.put("LDAP_INJECTION", "ldap");
+        // LDAP Injection -> CSV: ldapi
+        CATEGORY_MAPPING.put("LDAP_INJECTION", "ldapi");
 
-        // XPath Injection
-        CATEGORY_MAPPING.put("XPATH_INJECTION", "xpath");
+        // XPath Injection -> CSV: xpathi
+        CATEGORY_MAPPING.put("XPATH_INJECTION", "xpathi");
 
         // XSS
         CATEGORY_MAPPING.put("XSS_REQUEST_PARAMETER_TO_SERVLET_WRITER", "xss");
@@ -65,18 +66,26 @@ public class OwaspBenchmarkStrategy implements EvaluationStrategy {
         CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_MD2", "hash");
         CATEGORY_MAPPING.put("WEAK_MESSAGE_DIGEST_MD4", "hash");
 
-        // Weak Random
-        CATEGORY_MAPPING.put("PREDICTABLE_RANDOM", "weak-random");
+        // Weak Random -> CSV: weakrand
+        CATEGORY_MAPPING.put("PREDICTABLE_RANDOM", "weakrand");
+        CATEGORY_MAPPING.put("DMI_RANDOM_USED_ONLY_ONCE", "weakrand");
 
-        // Secure Cookie
-        CATEGORY_MAPPING.put("HTTPONLY_COOKIE", "secure-cookie");
-        CATEGORY_MAPPING.put("SECURE_COOKIE", "secure-cookie");
-        CATEGORY_MAPPING.put("INSECURE_COOKIE", "secure-cookie");
+        // Secure Cookie -> CSV: securecookie
+        CATEGORY_MAPPING.put("HTTPONLY_COOKIE", "securecookie");
+        CATEGORY_MAPPING.put("SECURE_COOKIE", "securecookie");
+        CATEGORY_MAPPING.put("INSECURE_COOKIE", "securecookie");
 
-        // Trust Boundary
-        CATEGORY_MAPPING.put("TRUST_BOUNDARY_VIOLATION", "trust-boundary");
+        // Trust Boundary -> CSV: trustbound
+        CATEGORY_MAPPING.put("TRUST_BOUNDARY_VIOLATION", "trustbound");
         
         // Add more mappings as needed
+    }
+
+    /**
+     * 判断给定的 ruleId 是否能映射到 Benchmark 类别
+     */
+    public static boolean isMappedCategory(String ruleId) {
+        return CATEGORY_MAPPING.containsKey(ruleId);
     }
 
     @Override

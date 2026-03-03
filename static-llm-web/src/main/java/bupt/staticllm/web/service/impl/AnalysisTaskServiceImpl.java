@@ -5,6 +5,7 @@ import bupt.staticllm.common.enums.IssueStatus;
 import bupt.staticllm.common.enums.TaskStatus;
 import bupt.staticllm.common.model.AnalysisTask;
 import bupt.staticllm.common.model.UnifiedIssue;
+import bupt.staticllm.core.evaluation.impl.OwaspBenchmarkStrategy;
 import bupt.staticllm.core.extractor.ContextExtractor;
 import bupt.staticllm.core.normalizer.SpotBugsNormalizer;
 import bupt.staticllm.web.context.AnalysisContextHolder;
@@ -83,18 +84,18 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-//        log.info("系统启动，开始扫描未完成的任务...");
-//        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
-//                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
-//
-//        if (tasks != null && !tasks.isEmpty()) {
-//            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
-//            for (AnalysisTask task : tasks) {
-//                taskExecutor.submit(() -> executeTask(task));
-//            }
-//        } else {
-//            log.info("没有发现未完成的任务");
-//        }
+        log.info("系统启动，开始扫描未完成的任务...");
+        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
+                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
+
+        if (tasks != null && !tasks.isEmpty()) {
+            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
+            for (AnalysisTask task : tasks) {
+                taskExecutor.submit(() -> executeTask(task));
+            }
+        } else {
+            log.info("没有发现未完成的任务");
+        }
     }
 
     @Override
@@ -274,6 +275,32 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                     .isNull(AnalysisIssue::getAiSuggestion) // 核心判断依据
             );
 
+            // Benchmark 模式：过滤掉无法映射到 Benchmark 类别的 issue，节省 token
+            Boolean benchmarkMode = (Boolean) params.get("benchmarkMode");
+            if (Boolean.TRUE.equals(benchmarkMode) && pendingIssues != null) {
+                int beforeSize = pendingIssues.size();
+                List<AnalysisIssue> skippedIssues = pendingIssues.stream()
+                    .filter(i -> !OwaspBenchmarkStrategy.isMappedCategory(i.getRuleId()))
+                    .toList();
+                pendingIssues = pendingIssues.stream()
+                    .filter(i -> OwaspBenchmarkStrategy.isMappedCategory(i.getRuleId()))
+                    .toList();
+                // 将跳过的 issue 按 ruleId 分组后批量更新，避免逐条操作数据库
+                Map<String, List<AnalysisIssue>> groupedByRule = skippedIssues.stream()
+                    .collect(Collectors.groupingBy(i -> i.getRuleId() != null ? i.getRuleId() : "UNKNOWN"));
+                for (Map.Entry<String, List<AnalysisIssue>> entry : groupedByRule.entrySet()) {
+                    List<Long> ids = entry.getValue().stream().map(AnalysisIssue::getId).toList();
+                    String skipMsg = "[SKIPPED] 该 ruleId(" + entry.getKey() + ") 无法映射到 Benchmark 类别，已跳过 AI 分析";
+                    analysisIssueMapper.update(null,
+                        new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AnalysisIssue>()
+                            .in(AnalysisIssue::getId, ids)
+                            .set(AnalysisIssue::getAiSuggestion, skipMsg)
+                            .set(AnalysisIssue::getStatus, IssueStatus.COMPLETED));
+                }
+                log.info("[Benchmark模式] TaskID: {} 过滤前={}, 过滤后={}, 跳过={}",
+                    task.getId(), beforeSize, pendingIssues.size(), skippedIssues.size());
+            }
+
             if (pendingIssues != null && !pendingIssues.isEmpty()) {
                 log.info("TaskID: {} 还有 {} 个 Issue 等待 LLM 分析", task.getId(), pendingIssues.size());
                 
@@ -293,11 +320,7 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
                                 "codeSnippet", dbIssue.getCodeSnippet()
                             );
 
-                            String promptContext = JSON.toJSONString(promptIssue);
-                            String userMessage = "请分析以下静态分析问题（JSON格式）：\n" +
-                                    promptContext + "\n\n" +
-                                    "该问题包含了源代码片段和可能的修复建议。请务必使用工具读取文件确认上下文。\n" +
-                                    "请返回符合 AuditResult 结构的 JSON 数据。";
+                            String userMessage = JSON.toJSONString(promptIssue);
                             
                             // 调用 Agent
                             String resultStr = codeAuditAgent.audit(userMessage);

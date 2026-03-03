@@ -6,6 +6,9 @@ import java.util.Map;
 
 @Data
 public class EvaluationReport {
+    /** 持久化后的记录ID */
+    private Long recordId;
+
     private int tpCount;
     private int fpCount;
     private int fnCount;

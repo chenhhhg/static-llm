@@ -15,4 +15,7 @@ public class EvaluateRequest {
 
     @Schema(description = "基准测试文件路径", requiredMode = Schema.RequiredMode.REQUIRED)
     private String benchmarkPath;
+
+    @Schema(description = "是否仅评估AI已分析的issue（true=仅AI分析后的, false=全量）", defaultValue = "false")
+    private Boolean aiOnly = false;
 }
