@@ -10,7 +10,10 @@ public interface AnalysisIssueService extends IService<AnalysisIssue> {
      * @param taskId 任务ID
      * @param page 页码
      * @param size 每页大小
+     * @param severity 严重程度
+     * @param keyword 关键词
+     * @param isFalsePositive 是否误报
      * @return 分页结果
      */
-    IPage<AnalysisIssue> getByTaskId(Long taskId, int page, int size);
+    IPage<AnalysisIssue> getByTaskId(Long taskId, int page, int size, String severity, String keyword, Boolean isFalsePositive);
 }

@@ -23,8 +23,11 @@ public class AnalysisIssueController {
     @GetMapping("/list/{taskId}")
     public Result<IPage<AnalysisIssue>> listByTaskId(@PathVariable Long taskId,
                                                      @RequestParam(defaultValue = "1") int page,
-                                                     @RequestParam(defaultValue = "10") int size) {
-        IPage<AnalysisIssue> issues = analysisIssueService.getByTaskId(taskId, page, size);
+                                                     @RequestParam(defaultValue = "10") int size,
+                                                     @RequestParam(required = false) String severity,
+                                                     @RequestParam(required = false) String keyword,
+                                                     @RequestParam(required = false) Boolean isFalsePositive) {
+        IPage<AnalysisIssue> issues = analysisIssueService.getByTaskId(taskId, page, size, severity, keyword, isFalsePositive);
         return Result.success(issues);
     }
 

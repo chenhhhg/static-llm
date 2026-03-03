@@ -1,5 +1,6 @@
 package bupt.staticllm.web.service.impl;
 
+import bupt.staticllm.common.enums.IssueStatus;
 import bupt.staticllm.common.model.AnalysisIssue;
 import bupt.staticllm.common.model.UnifiedIssue;
 import bupt.staticllm.core.evaluation.EvaluationProvider;
@@ -47,11 +48,14 @@ public class EvaluationServiceImpl implements EvaluationService {
         log.info("Loaded {} benchmark cases from {}", expectedCases.size(), benchmarkPath);
 
         // 3. Load Actual Issues
+        // Only load issues that have been analyzed by AI (status == COMPLETED)
         List<AnalysisIssue> analysisIssues = analysisIssueService.list(
-                new LambdaQueryWrapper<AnalysisIssue>().eq(AnalysisIssue::getTaskId, taskId)
+                new LambdaQueryWrapper<AnalysisIssue>()
+                        .eq(AnalysisIssue::getTaskId, taskId)
+                        .eq(AnalysisIssue::getStatus, IssueStatus.COMPLETED)
         );
         List<UnifiedIssue> actualIssues = convertToUnified(analysisIssues);
-        log.info("Loaded {} actual issues for task {}", actualIssues.size(), taskId);
+        log.info("Loaded {} actual issues for task {} (after AI filtering)", actualIssues.size(), taskId);
 
         // 4. Perform Evaluation
         List<EvaluationResult> results = new ArrayList<>();
@@ -65,18 +69,21 @@ public class EvaluationServiceImpl implements EvaluationService {
     }
 
     private List<UnifiedIssue> convertToUnified(List<AnalysisIssue> analysisIssues) {
-        return analysisIssues.stream().map(issue -> {
-            UnifiedIssue unified = new UnifiedIssue();
-            unified.setToolName(issue.getToolName());
-            unified.setRuleId(issue.getRuleId());
-            unified.setSeverity(issue.getSeverity());
-            unified.setFilePath(issue.getFilePath());
-            unified.setStartLine(issue.getStartLine() != null ? issue.getStartLine() : 0);
-            unified.setEndLine(issue.getEndLine() != null ? issue.getEndLine() : 0);
-            unified.setMessage(issue.getMessage());
-            unified.setCodeSnippet(issue.getCodeSnippet());
-            return unified;
-        }).collect(Collectors.toList());
+        return analysisIssues.stream()
+                // Filter out issues identified as False Positive by AI
+                .filter(issue -> issue.getIsFalsePositive() == null || !issue.getIsFalsePositive())
+                .map(issue -> {
+                    UnifiedIssue unified = new UnifiedIssue();
+                    unified.setToolName(issue.getToolName());
+                    unified.setRuleId(issue.getRuleId());
+                    unified.setSeverity(issue.getSeverity());
+                    unified.setFilePath(issue.getFilePath());
+                    unified.setStartLine(issue.getStartLine() != null ? issue.getStartLine() : 0);
+                    unified.setEndLine(issue.getEndLine() != null ? issue.getEndLine() : 0);
+                    unified.setMessage(issue.getMessage());
+                    unified.setCodeSnippet(issue.getCodeSnippet());
+                    return unified;
+                }).collect(Collectors.toList());
     }
 
     private EvaluationReport calculateMetrics(List<EvaluationResult> results) {
