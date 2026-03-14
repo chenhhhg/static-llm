@@ -40,6 +40,9 @@ public class EvaluationRecord implements Serializable {
     private Double f1Score;
     private Double benchmarkScore;
 
+    /** 不可映射到Benchmark类别的Issue数量 */
+    private Integer unmappedIssueCount;
+
     // ========== AI误判分析指标（AI_MISJUDGMENT 模式） ==========
 
     /** AI已分析总数 */

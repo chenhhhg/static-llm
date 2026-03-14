@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS `evaluation_record` (
   `recall_rate` double DEFAULT NULL COMMENT '召回率',
   `f1_score` double DEFAULT NULL COMMENT 'F1分数',
   `benchmark_score` double DEFAULT NULL COMMENT 'Benchmark分数',
+  `unmapped_issue_count` int(11) DEFAULT NULL COMMENT '不可映射到Benchmark类别的Issue数量',
   `total_analyzed` int(11) DEFAULT NULL COMMENT 'AI误判分析-已分析总数',
   `matched_count` int(11) DEFAULT NULL COMMENT 'AI误判分析-匹配Benchmark的数量',
   `correct_count` int(11) DEFAULT NULL COMMENT 'AI误判分析-AI判断正确数量',

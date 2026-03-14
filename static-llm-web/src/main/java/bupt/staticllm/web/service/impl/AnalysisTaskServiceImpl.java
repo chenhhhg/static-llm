@@ -84,18 +84,18 @@ public class AnalysisTaskServiceImpl extends ServiceImpl<AnalysisTaskMapper, Ana
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        log.info("系统启动，开始扫描未完成的任务...");
-        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
-                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
-
-        if (tasks != null && !tasks.isEmpty()) {
-            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
-            for (AnalysisTask task : tasks) {
-                taskExecutor.submit(() -> executeTask(task));
-            }
-        } else {
-            log.info("没有发现未完成的任务");
-        }
+//        log.info("系统启动，开始扫描未完成的任务...");
+//        List<AnalysisTask> tasks = this.list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnalysisTask>()
+//                .notIn(AnalysisTask::getStatus, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED));
+//
+//        if (tasks != null && !tasks.isEmpty()) {
+//            log.info("发现 {} 个未完成任务，准备恢复执行", tasks.size());
+//            for (AnalysisTask task : tasks) {
+//                taskExecutor.submit(() -> executeTask(task));
+//            }
+//        } else {
+//            log.info("没有发现未完成的任务");
+//        }
     }
 
     @Override

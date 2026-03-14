@@ -18,6 +18,9 @@ public class EvaluationReport {
     private double recall;
     private double f1Score;
     private double benchmarkScore;
+
+    /** 不可映射到Benchmark类别的Issue数量（SpotBugs检出但ruleId无对应Benchmark类别） */
+    private int unmappedIssueCount;
     
     private List<EvaluationResult> details;
     private Map<String, CategoryStats> categoryStats;

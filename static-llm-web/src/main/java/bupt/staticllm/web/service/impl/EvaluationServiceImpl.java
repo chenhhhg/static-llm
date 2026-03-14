@@ -7,6 +7,7 @@ import bupt.staticllm.common.model.EvaluationRecord;
 import bupt.staticllm.common.model.UnifiedIssue;
 import bupt.staticllm.core.evaluation.EvaluationProvider;
 import bupt.staticllm.core.evaluation.EvaluationStrategy;
+import bupt.staticllm.core.evaluation.impl.OwaspBenchmarkStrategy;
 import bupt.staticllm.core.evaluation.model.AiMisjudgmentReport;
 import bupt.staticllm.core.evaluation.model.BenchmarkCase;
 import bupt.staticllm.core.evaluation.model.EvaluationReport;
@@ -92,17 +93,30 @@ public class EvaluationServiceImpl implements EvaluationService {
             );
         }
 
-        // 4. Perform Evaluation
+        // 4. 统计不可映射到Benchmark类别的Issue数量
+        int unmappedIssueCount = (int) actualIssues.stream()
+                .filter(issue -> !OwaspBenchmarkStrategy.isMappedCategory(issue.getRuleId()))
+                .count();
+        if (unmappedIssueCount > 0) {
+            // 按ruleId分组统计
+            Map<String, Long> unmappedByRule = actualIssues.stream()
+                    .filter(issue -> !OwaspBenchmarkStrategy.isMappedCategory(issue.getRuleId()))
+                    .collect(Collectors.groupingBy(UnifiedIssue::getRuleId, Collectors.counting()));
+            log.info("[评估] 不可映射到Benchmark类别的Issue: 总数={}, 按规则分布={}", unmappedIssueCount, unmappedByRule);
+        }
+
+        // 5. Perform Evaluation
         List<EvaluationResult> results = new ArrayList<>();
         for (BenchmarkCase expected : expectedCases) {
             EvaluationResult result = strategy.evaluate(expected, actualIssues);
             results.add(result);
         }
 
-        // 5. Calculate Metrics
+        // 6. Calculate Metrics
         EvaluationReport report = calculateMetrics(results);
+        report.setUnmappedIssueCount(unmappedIssueCount);
 
-        // 6. 持久化评估记录
+        // 7. 持久化评估记录
         String evalMode = aiOnly ? "AI_ONLY" : "FULL";
         EvaluationRecord record = new EvaluationRecord();
         record.setTaskId(taskId);
@@ -117,6 +131,7 @@ public class EvaluationServiceImpl implements EvaluationService {
         record.setRecallRate(report.getRecall());
         record.setF1Score(report.getF1Score());
         record.setBenchmarkScore(report.getBenchmarkScore());
+        record.setUnmappedIssueCount(unmappedIssueCount);
         evaluationRecordService.save(record);
         log.info("[评估持久化] 保存评估记录 id={}, mode={}", record.getId(), evalMode);
 
